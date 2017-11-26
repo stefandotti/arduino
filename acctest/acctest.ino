@@ -15,11 +15,15 @@
 
 #define DELAY   100
 #define BASE    0
-#define DELTA   4000
+#define DELTA   200
 
 #define XOFFSET 0
 #define YOFFSET -500
 #define ZOFFSET 1800
+
+#define AVG     10
+
+int level = 300;
 
 Adafruit_NeoPixel pixels = Adafruit_NeoPixel(NUMPIXELS, PIN, NEO_GRB + NEO_KHZ800);
 #include<Wire.h>
@@ -33,65 +37,68 @@ void setup() {
   Wire.write(0);     // set to zero (wakes up the MPU-6050)
   Wire.endTransmission(true);
   Serial.begin(9600);
+  readmpu();
+  level = AcY + 100;
 }
 
 int old_x = 0, old_y = 0, old_z = 0;
 int running_mode = 0;
 int speed = 0;
-int l = 0, speedi = 0, speeddelta = 0;
+int l = 0, speedi = 0, speeddelta = 0, j = 0;
 boolean cc = false;
+int avgspeed;
 
 void loop() {
-  Wire.beginTransmission(MPU_addr);
-  Wire.write(0x3B);  // starting with register 0x3B (ACCEL_XOUT_H)
-  Wire.endTransmission(false);
-  Wire.requestFrom(MPU_addr, 14, true); // request a total of 14 registers
-  AcX = Wire.read() << 8 | Wire.read(); // 0x3B (ACCEL_XOUT_H) & 0x3C (ACCEL_XOUT_L)
-  AcY = Wire.read() << 8 | Wire.read(); // 0x3D (ACCEL_YOUT_H) & 0x3E (ACCEL_YOUT_L)
-  AcZ = Wire.read() << 8 | Wire.read(); // 0x3F (ACCEL_ZOUT_H) & 0x40 (ACCEL_ZOUT_L)
-  Tmp = Wire.read() << 8 | Wire.read(); // 0x41 (TEMP_OUT_H) & 0x42 (TEMP_OUT_L)
-  GyX = Wire.read() << 8 | Wire.read(); // 0x43 (GYRO_XOUT_H) & 0x44 (GYRO_XOUT_L)
-  GyY = Wire.read() << 8 | Wire.read(); // 0x45 (GYRO_YOUT_H) & 0x46 (GYRO_YOUT_L)
-  GyZ = Wire.read() << 8 | Wire.read(); // 0x47 (GYRO_ZOUT_H) & 0x48 (GYRO_ZOUT_L)
-
-  AcX -= XOFFSET;
-  AcY -= YOFFSET;
-  AcZ -= ZOFFSET;
-
+  readmpu();
+  avgspeed += AcY;
+  
   //  Serial.print("AcX = "); Serial.print(AcX);
   //  Serial.print(" | AcY = "); Serial.print(AcY);
   //  Serial.print(" | AcZ = "); Serial.println(AcZ);
   //
   //  Serial.print("mode: "); Serial.println(running_mode);
 
-  if (BASE == 0) {
-    // x, z is sideways, y is for-backward
-    speed = AcY;
-    if (abs(old_y - AcY) > DELTA) {
-      if (old_y < AcY) {
-        running_mode = ACC;
-      } else {
-        running_mode = DECC;
+  if (j >= NUMPIXELS) {
+    j = 0;
+    speed = avgspeed / NUMPIXELS;
+    avgspeed = 0;
+    if (BASE == 0) {
+      // x, z is sideways, y is for-backward
+      if (abs(old_y - speed) > DELTA) {
+        if (old_y < speed) {
+          running_mode = ACC;
+        } else {
+          running_mode = DECC;
+        }
+      } else if (speed > level) {
+        running_mode = RUNNING;
       }
-    } else if (speed > 500) {
-      running_mode = RUNNING;
+    } else if (BASE == 1) {
+      // y, z is sideways, x is for-backward
+    } else if (BASE == 2) {
+      // z, y is sideways, x is for-backward
     }
-  } else if (BASE == 1) {
-    // y, z is sideways, x is for-backward
-  } else if (BASE == 2) {
-    // z, y is sideways, x is for-backward
-  }
 
+    old_y = speed;
+  }
+  j++;
+
+  Serial.print(level);
+  Serial.print(" - ");
   Serial.println(speed);
 
-  if (speed < 500) {
+  if (speed < level) {
     speed = 0;
     running_mode = STOPPED;
   }
 
   // set the base color
   for (int i = 0; i < NUMPIXELS; i++) {
-    pixels.setPixelColor(i, pixels.Color(0, 0, 55));
+    if (running_mode == DECC) {
+      pixels.setPixelColor(i, pixels.Color(255, 0, 0));
+    } else {
+      pixels.setPixelColor(i, pixels.Color(0, 0, 55));
+    }
   }
 
   // set color according to mode
@@ -101,10 +108,10 @@ void loop() {
       pixels.setPixelColor(l, pixels.Color(10, 0, 0));
     } else if (running_mode == ACC) {
       // accelerating
-      pixels.setPixelColor(l, pixels.Color(0, 0, 255));
+      pixels.setPixelColor(l, pixels.Color(255, 255, 255));
     } else if (running_mode == RUNNING) {
       // running
-      pixels.setPixelColor(l, pixels.Color(0, 255, 0));
+      pixels.setPixelColor(l, pixels.Color(0, 0, 255));
     } else if (running_mode == DECC) {
       // deccelerating
       pixels.setPixelColor(l, pixels.Color(255, 0, 0));
@@ -123,11 +130,24 @@ void loop() {
   }
 
   if (l >= NUMPIXELS) l = 0;
+}
 
-  old_x = AcX;
-  old_y = AcY;
-  old_z = AcZ;
-
-  delay(DELAY);
+void readmpu() {
+  AcX = 0; AcY = 0; AcZ = 0; Tmp = 0; GyX = 0; GyY = 0; GyZ = 0;
+  for(int n = 0; n < AVG; n++) {
+    Wire.beginTransmission(MPU_addr);
+    Wire.write(0x3B);  // starting with register 0x3B (ACCEL_XOUT_H)
+    Wire.endTransmission(false);
+    Wire.requestFrom(MPU_addr, 14, true); // request a total of 14 registers
+    AcX += Wire.read() << 8 | Wire.read(); // 0x3B (ACCEL_XOUT_H) & 0x3C (ACCEL_XOUT_L)
+    AcY += Wire.read() << 8 | Wire.read(); // 0x3D (ACCEL_YOUT_H) & 0x3E (ACCEL_YOUT_L)
+    AcZ += Wire.read() << 8 | Wire.read(); // 0x3F (ACCEL_ZOUT_H) & 0x40 (ACCEL_ZOUT_L)
+    Tmp += Wire.read() << 8 | Wire.read(); // 0x41 (TEMP_OUT_H) & 0x42 (TEMP_OUT_L)
+    GyX += Wire.read() << 8 | Wire.read(); // 0x43 (GYRO_XOUT_H) & 0x44 (GYRO_XOUT_L)
+    GyY += Wire.read() << 8 | Wire.read(); // 0x45 (GYRO_YOUT_H) & 0x46 (GYRO_YOUT_L)
+    GyZ += Wire.read() << 8 | Wire.read(); // 0x47 (GYRO_ZOUT_H) & 0x48 (GYRO_ZOUT_L)
+    delay(DELAY / AVG);
+  }
+  AcX /= AVG; AcY /= AVG; AcZ /= AVG; Tmp /= AVG; GyX /= AVG; GyY /= AVG; GyZ /= AVG;
 }
 
