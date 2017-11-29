@@ -17,7 +17,7 @@
 
 #define DELAY   20
 #define BASE    0
-#define DELTA   2
+#define DELTA   1
 
 #define XOFFSET 0
 #define YOFFSET -500
@@ -38,8 +38,8 @@ void setup() {
   Wire.write(0x6B);  // PWR_MGMT_1 register
   Wire.write(0);     // set to zero (wakes up the MPU-6050)
   Wire.endTransmission(true);
-  pinMode(pinSwitch, INPUT); // reed 
-  Serial.begin(9600);
+  pinMode(pinSwitch, INPUT); // reed
+  //Serial.begin(9600);
   readmpu();
   level = AcY + 100;
 }
@@ -52,55 +52,51 @@ boolean cc = false;
 int avgspeed;
 int StatoSwitch = 0;
 boolean stat = false;
+int countStopped = 0;
+int wheelCount = 0;
 
 void loop() {
-  readmpu();
-  avgspeed += AcY;
   StatoSwitch = digitalRead(pinSwitch);
-  
-  //  Serial.print("AcX = "); Serial.print(AcX);
-  //  Serial.print(" | AcY = "); Serial.print(AcY);
-  //  Serial.print(" | AcZ = "); Serial.println(AcZ);
-  //
-  //  Serial.print("mode: "); Serial.println(running_mode);
 
   if (!stat && StatoSwitch == HIGH) {
     c++;
+    wheelCount++;
     stat = true;
   } else if (StatoSwitch == LOW) {
     stat = false;
   }
 
-  if (j >= NUMPIXELS) {
+  if (j >= NUMPIXELS * 2) {
     j = 0;
-    Serial.print("reed count: "); Serial.println(c);
-    //speed = avgspeed / NUMPIXELS;
-    speed = c / NUMPIXELS;
-    avgspeed = 0;
-    if (BASE == 0) {
-      // x, z is sideways, y is for-backward
-      if (speed > level && abs(old_y - speed) > DELTA) {
-        if (old_y < speed) {
-          running_mode = ACC;
-        } else {
-          running_mode = DECC;
-        }
-      } else if (c > 0) {
-        running_mode = RUNNING;
-      } else if (c == 0) {
-        running_mode = STOPPED;
-      }
-    } else if (BASE == 1) {
-      // y, z is sideways, x is for-backward
-    } else if (BASE == 2) {
-      // z, y is sideways, x is for-backward
+
+    //    Serial.print("wheel count: "); Serial.println(wheelCount);
+    //    Serial.println((double)(wheelCount * 10) / ((double)NUMPIXELS * 2));
+    speed = ceil((double)(wheelCount * 10) / ((double)NUMPIXELS * 2));
+    wheelCount = 0;
+    if (c == old_c) {
+      // no speed change
+      c = 0;
+      speed = 0;
+      //      Serial.println("reset speed to zero");
     }
 
-    Serial.print(running_mode); Serial.print(" - "); Serial.print(level); Serial.print(" - "); Serial.println(speed);
-  
-    //old_y = speed;
-    if (c == old_c) { c = 0; }
-    currentSpeed = c / NUMPIXELS;
+    //    Serial.print("reed count: "); Serial.println(c);
+    // x, z is sideways, y is for-backward
+    if (speed - old_y > 0) {
+      running_mode = ACC;
+    } else if (speed == 0 && (old_y > 0 || countStopped > 0)) {
+      if (countStopped++ > 3) {
+        running_mode = DECC;
+        countStopped = 0;
+      }
+    } else if (speed > 0) {
+      running_mode = RUNNING;
+    } else if (speed == 0) {
+      running_mode = STOPPED;
+    }
+
+    //Serial.print(running_mode); Serial.print(" - "); Serial.println(speed);
+
     old_y = speed;
     old_c = c;
   }
@@ -123,7 +119,9 @@ void loop() {
       pixels.setPixelColor(l, pixels.Color(0, 0, 255));
     } else if (running_mode == DECC) {
       // deccelerating
-      pixels.setPixelColor(l, pixels.Color(255, 0, 0));
+      for (int i = 0; i < NUMPIXELS; i++) {
+        pixels.setPixelColor(i, pixels.Color(255, 0, 0));
+      }
     } else {
       // unknown
       pixels.setPixelColor(l, pixels.Color(255, 255, 255));
@@ -133,18 +131,20 @@ void loop() {
 
   old_l = l;
   speedi++;
-  int a = 10 - currentSpeed;
+  int a = 20 / speed;
   if (a < 0) a = 1;
   if (speedi % a == 0) {
     l++;
   }
 
   if (l >= NUMPIXELS) l = 0;
+
+  delay(DELAY);
 }
 
 void readmpu() {
   AcX = 0; AcY = 0; AcZ = 0; Tmp = 0; GyX = 0; GyY = 0; GyZ = 0;
-  for(int n = 0; n < AVG; n++) {
+  for (int n = 0; n < AVG; n++) {
     Wire.beginTransmission(MPU_addr);
     Wire.write(0x3B);  // starting with register 0x3B (ACCEL_XOUT_H)
     Wire.endTransmission(false);
